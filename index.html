@@ -10,10 +10,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Ear Training EQ Game</title>
     <!-- React & ReactDOM -->
-    <script crossorigin src="https://unpkg.com/react@17/umd/react.development.js"></script>
-    <script crossorigin src="https://unpkg.com/react-dom@17/umd/react-dom.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react@17.0.2/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@17.0.2/umd/react-dom.production.min.js"></script>
     <!-- Babel for in-browser JSX transpiling (demo only) -->
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script crossorigin src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
     <style>
       html, body {
         margin: 0;
@@ -812,31 +812,6 @@
 
       const { useState, useEffect, useRef } = React;
 
-      // Audio prompt component
-      const AudioPrompt = () => (
-        <div className="modalOverlay">
-          <div className="modalContent">
-            <h2>Dive Bar Simulator</h2>
-            <p>Please select audio files to start the game</p>
-            <div className="fileInputContainer" style={{ margin: '20px 0' }}>
-              <label htmlFor="initialFileInput" className="fileInputLabel">
-                Choose Audio Files
-              </label>
-              <input 
-                id="initialFileInput"
-                type="file" 
-                accept="audio/*,video/*" 
-                onChange={(e) => {
-                  handleFilesChange(e);
-                  setShowAudioPrompt(false);
-                }} 
-                multiple 
-              />
-            </div>
-          </div>
-        </div>
-      );
-      
       // Instructions modal component with multiple pages
       const InstructionsModal = ({ onClose }) => {
         const [currentPage, setCurrentPage] = useState(0);
@@ -1091,6 +1066,7 @@
 
         // Crowd ambiance audio.
         const crowdAudioRef = useRef(null);
+        const crowdAudioAvailableRef = useRef(true);
 
         // Track last slider interaction for auto-check
         const sliderTimeoutRef = useRef(null);
@@ -1101,22 +1077,21 @@
         const feedbackGainNodeRef = useRef(null);
         const feedbackLFORef = useRef(null);
 
+        const createAudioContext = () => {
+          const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+          if (!AudioContextCtor) {
+            throw new Error("This browser does not support the Web Audio API.");
+          }
+          return new AudioContextCtor();
+        };
+
         // Initial setup effect
         useEffect(() => {
-          // Initialize crowd audio with CROWDNOISE.mp3
           if (crowdAudioRef.current) {
-            crowdAudioRef.current.src = "CROWDNOISE.mp3"; // Use local file instead of base64
-            crowdAudioRef.current.load(); // Force reload with the new source
             crowdAudioRef.current.volume = crowdVolume;
-            
-            // Set up crossfade looping when loaded
+            crowdAudioRef.current.addEventListener('error', handleCrowdAudioError);
             crowdAudioRef.current.addEventListener('loadeddata', setupCrowdNoiseLooping);
           }
-          
-          // Create secondary crowd audio element
-          const secondaryAudio = new Audio("CROWDNOISE.mp3");
-          secondaryAudio.volume = 0;
-          secondaryCrowdAudioRef.current = secondaryAudio;
           
           return () => {
             // Cleanup
@@ -1129,6 +1104,7 @@
             // Clean up crowd audio elements
             if (crowdAudioRef.current) {
               crowdAudioRef.current.removeEventListener('loadeddata', setupCrowdNoiseLooping);
+              crowdAudioRef.current.removeEventListener('error', handleCrowdAudioError);
               crowdAudioRef.current.pause();
               crowdAudioRef.current = null;
             }
@@ -1147,16 +1123,46 @@
           };
         }, []);
 
+        function handleCrowdAudioError() {
+          crowdAudioAvailableRef.current = false;
+          setCrowdVolume(0);
+          if (crowdAudioRef.current) {
+            crowdAudioRef.current.pause();
+            crowdAudioRef.current.removeAttribute('src');
+            crowdAudioRef.current.load();
+          }
+          if (secondaryCrowdAudioRef.current) {
+            secondaryCrowdAudioRef.current.pause();
+            secondaryCrowdAudioRef.current.removeAttribute('src');
+          }
+          console.warn("Optional CROWDNOISE.mp3 was not found or could not be loaded; continuing without crowd ambience.");
+        }
+
+        function ensureCrowdAudio() {
+          if (!crowdAudioAvailableRef.current || !crowdAudioRef.current) return false;
+
+          if (!crowdAudioRef.current.getAttribute('src')) {
+            crowdAudioRef.current.src = "CROWDNOISE.mp3";
+            crowdAudioRef.current.load();
+          }
+
+          if (!secondaryCrowdAudioRef.current) {
+            const secondaryAudio = new Audio();
+            secondaryAudio.preload = "auto";
+            secondaryAudio.volume = 0;
+            secondaryAudio.addEventListener('error', handleCrowdAudioError);
+            secondaryAudio.src = "CROWDNOISE.mp3";
+            secondaryCrowdAudioRef.current = secondaryAudio;
+          }
+
+          return true;
+        }
+
         // Function to handle crowd noise looping with crossfading
         function setupCrowdNoiseLooping() {
           if (!crowdAudioRef.current) return;
           
-          // Create secondary crowd audio element if it doesn't exist
-          if (!secondaryCrowdAudioRef.current) {
-            const secondaryAudio = new Audio("CROWDNOISE.mp3");
-            secondaryAudio.volume = 0;
-            secondaryCrowdAudioRef.current = secondaryAudio;
-          }
+          ensureCrowdAudio();
           
           // Always ensure crowd audio has the current set volume level
           if (crowdAudioRef.current) {
@@ -1817,7 +1823,7 @@
             // Initialize context and decode all files in the background
             let context = audioContextRef.current;
             if (!context || context.state === "closed") {
-              context = new AudioContext();
+              context = createAudioContext();
               audioContextRef.current = context;
             }
             
@@ -1879,7 +1885,7 @@
           // Create context if needed
           let context = audioContextRef.current;
           if (!context || context.state === "closed") {
-            context = new AudioContext();
+            context = createAudioContext();
             audioContextRef.current = context;
           } else if (context.state === "suspended") {
             await context.resume();
@@ -1952,7 +1958,7 @@
             source.start(0, startPosition);
             
             // Start crowd ambiance if needed
-            if (crowdAudioRef.current) {
+            if (ensureCrowdAudio() && crowdAudioRef.current) {
               crowdAudioRef.current.volume = crowdVolume;
               if (crowdAudioRef.current.readyState > 0) {
                 try {
@@ -2157,7 +2163,7 @@
             // Create a small delay to ensure complete cleanup
             setTimeout(() => {
               // Create a brand new audio context
-              const newContext = new AudioContext();
+              const newContext = createAudioContext();
               audioContextRef.current = newContext;
               
               // Reset other audio components
@@ -2171,7 +2177,7 @@
               loadCurrentTrack(nextIndex, wasPlaying);
               
               // Make sure crowd noise keeps playing with proper volume
-              if (crowdAudioRef.current) {
+              if (ensureCrowdAudio() && crowdAudioRef.current) {
                 // Always set the volume to the captured state value, regardless of playback state
                 crowdAudioRef.current.volume = currentCrowdVolumeValue;
                 console.log("Restored crowd volume to:", currentCrowdVolumeValue);
@@ -2243,7 +2249,7 @@
             // Create a small delay to ensure complete cleanup
             setTimeout(() => {
               // Create a brand new audio context
-              const newContext = new AudioContext();
+              const newContext = createAudioContext();
               audioContextRef.current = newContext;
               
               // Reset other audio components
@@ -2257,7 +2263,7 @@
               loadCurrentTrack(targetIndex, wasPlaying);
               
               // Make sure crowd noise keeps playing with proper volume
-              if (crowdAudioRef.current) {
+              if (ensureCrowdAudio() && crowdAudioRef.current) {
                 // Always set the volume to the captured state value, regardless of playback state
                 crowdAudioRef.current.volume = currentCrowdVolumeValue;
                 console.log("Restored crowd volume to:", currentCrowdVolumeValue);
@@ -2824,7 +2830,7 @@
             }
           } 
           // Normal scenario (no crossfade)
-          else if (crowdAudioRef.current) {
+          else if (ensureCrowdAudio() && crowdAudioRef.current) {
             // Always set the volume, regardless of playback state
             crowdAudioRef.current.volume = vol;
             
@@ -3027,8 +3033,6 @@
           }
           setIsReferenceActive(false);
           setIsShowingReference(false);
-          setOriginalFilterGains([]);
-          
           // Clear all timers
           if (timerRef.current) {
             clearInterval(timerRef.current);
@@ -3446,13 +3450,10 @@
                           width: "34px", /* Slightly narrower slider */
                           height: "200px",
                           background: isTargetSlider ? "red" : "gray",
-                          writingMode: "bt-lr",
-                          WebkitAppearance: "slider-vertical",
+                          writingMode: "vertical-lr",
+                          direction: "rtl",
                           cursor: "pointer",
-                          margin: "0 3px", /* Smaller margins between sliders */
-                          // Add these for better cross-browser compatibility for vertical sliders
-                          MozAppearance: "slider-vertical",
-                          appearance: "slider-vertical"
+                          margin: "0 3px" /* Smaller margins between sliders */
                         }}
                       />
                       {/* Show yellow target dot ONLY if debug mode is on */}
@@ -3628,10 +3629,8 @@
               {/* Controls removed - now at top of EQ panel */}
             </div>
             
-            {/* Crowd ambiance audio element (preloaded) */}
-            <audio ref={crowdAudioRef} preload="auto" style={{ display: "none" }}>
-              <source src="CROWDNOISE.mp3" type="audio/mp3" />
-            </audio>
+            {/* Optional crowd ambiance audio element */}
+            <audio ref={crowdAudioRef} preload="none" style={{ display: "none" }} />
 
             {/* Game Over Modal */}
             {gameOver && (
